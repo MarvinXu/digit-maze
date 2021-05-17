@@ -1,209 +1,200 @@
-const canvas = wx.createCanvas();
-const ctx = canvas.getContext("2d"); // 创建一个 2d context
-const {
-  windowWidth,
-  windowHeight,
-  statusBarHeight,
-  pixelRatio,
-} = wx.getSystemInfoSync();
-const px = (x) => x * pixelRatio;
-const winW = px(windowWidth);
-const winH = px(windowHeight);
-canvas.width = winW;
-canvas.height = winH;
-const BOARD_MARGIN = px(20);
-const BOARD_W = winW - BOARD_MARGIN * 2;
-const STATUS_Y = px(70 + statusBarHeight);
-const BOARD_X = BOARD_MARGIN;
-const BOARD_Y = px(100 + statusBarHeight);
-const GAP_LENGTH = px(10);
-const SLIDE_W = (BOARD_W - GAP_LENGTH * 5) / 4;
-const BUTTON_X = px(40);
-const BUTTON_Y = BOARD_Y + BOARD_W + px(40);
-const BUTTON_W = winW - BUTTON_X * 2;
-const BUTTON_H = px(60);
+const isWx = typeof wx === "object";
+if (isWx) {
+  require("./weapp-adapter");
+}
+const ctx = canvas.getContext("2d");
+const px = (x) => x * window.devicePixelRatio;
 
-const fin = [
-  [1, 2, 3, 4],
-  [5, 6, 7, 8],
-  [9, 10, 11, 12],
-  [13, 14, 15, 0],
-];
-let arr = clone(fin);
-let playing = false;
-let timeElapsed = 0;
-let start = 0;
+const CANVAS_W = px(screen.availWidth);
+const CANVAS_H = px(screen.availHeight);
+const BOARD_X = px(20);
+const BOARD_Y = px(100);
+const BOARD_W = CANVAS_W - px(20) * 2;
+const ANIM_DURATION = 80;
 
-requestAnimationFrame(draw);
+let size = 4;
+let sliderMargin = px(5);
+let sliderWidth = (BOARD_W - sliderMargin * (size + 1)) / size;
+let fontSize = Math.floor(sliderWidth * 0.8);
 
-wx.onTouchStart((e) => {
-  const { pageX, pageY } = e.touches[0];
-  const x = px(pageX);
-  const y = px(pageY);
+let matrix = createMatrix(size);
 
-  if (!playing) {
+let clickStamp = 0;
+let clickPosition = [-1, -1];
+let animOn = false;
+let playing = true;
+
+// ------ start script
+// scale
+canvas.width = CANVAS_W;
+canvas.height = CANVAS_H;
+
+draw();
+
+window.addEventListener("touchstart", (e) => {
+  const { clientX, clientY } = e.touches[0];
+  let x = clientX;
+  let y = clientY;
+  if (isWx) {
+    x = px(clientX);
+    y = px(clientY);
+  }
+  iterateMatrix(matrix, (i, j) => {
+    let startX = BOARD_X + sliderMargin * (j + 1) + sliderWidth * j;
+    let startY = BOARD_Y + sliderMargin * (i + 1) + sliderWidth * i;
     if (
-      x > BUTTON_X &&
-      x < BUTTON_X + BUTTON_W &&
-      y > BUTTON_Y &&
-      y < BUTTON_Y + BUTTON_H
+      x > startX &&
+      x < startX + sliderWidth &&
+      y > startY &&
+      y < startY + sliderWidth
     ) {
-      playing = true;
-      start = 0;
-      arr = shuffle(fin);
-    }
-  } else {
-    iterate(arr, (i, j) => {
-      let startX = BOARD_X + GAP_LENGTH * (j + 1) + SLIDE_W * j;
-      let startY = BOARD_Y + GAP_LENGTH * (i + 1) + SLIDE_W * i;
-      if (
-        x > startX &&
-        x < startX + SLIDE_W &&
-        y > startY &&
-        y < startY + SLIDE_W
-      ) {
-        onSlideClick(i, j);
-      }
-    });
-  }
-});
-
-
-function draw(timestamp) {
-  // ctx.clearRect(0, 0, winW, winH);
-
-  // 背景色
-  ctx.fillStyle = "#fef7ed";
-  ctx.fillRect(0, 0, winW, winH);
-
-  drawStatusBar();
-
-  drawBoard();
-
-  if (!playing) {
-    drawStartButton();
-  } else {
-    if (start === 0) start = timestamp;
-    timeElapsed = Math.floor(timestamp - start);
-  }
-  
-
-  iterate(arr, (i, j) => {
-    let num = arr[i][j];
-    if (num !== 0) {
-      drawSlide(
-        BOARD_X + GAP_LENGTH * (j + 1) + SLIDE_W * j,
-        BOARD_Y + GAP_LENGTH * (i + 1) + SLIDE_W * i,
-        num
-      );
+      onSliderClick(i, j);
     }
   });
+});
+
+// ------- functions
+function draw() {
+  drawBoard();
+
+  const [i0, j0] = getZeroPostion(matrix);
+  const [i1, j1] = clickPosition;
+
+  let now = Date.now();
+  let distance = sliderWidth + sliderMargin;
+  let offset = 0;
+
+  if (clickStamp !== 0 && animOn) {
+    offset = Math.min(
+      distance,
+      (distance / ANIM_DURATION) * (now - clickStamp)
+    );
+  }
+
+  iterateMatrix(matrix, (i, j) => {
+    let x = BOARD_X + sliderMargin * (j + 1) + sliderWidth * j;
+    let y = BOARD_Y + sliderMargin * (i + 1) + sliderWidth * i;
+    const num = matrix[i][j];
+
+    if (num) {
+      // calculate transition
+      if (animOn) {
+        if (i1 === i0 && i === i0) {
+          if (j1 < j0 && j < j0 && j >= j1) {
+            x = x + offset;
+          } else if (j1 > j0 && j > j0 && j <= j1) {
+            x = x - offset;
+          }
+        } else if (j1 === j0 && j === j0) {
+          if (i1 < i0 && i < i0 && i >= i1) {
+            y = y + offset;
+          } else if (i1 > i0 && i > i0 && i <= i1) {
+            y = y - offset;
+          }
+        }
+      }
+      drawSlider(x, y, num);
+    }
+  });
+
+  // if (start !== 0 && now - start > ANIM_DURATION) {
+  //   transformMatrix(matrix, i1, j1)
+  // }
 
   requestAnimationFrame(draw);
 }
 
-function onSlideClick(i, j) {
-  let res = getResult(arr, i, j);
-  if (res) {
-    arr = res;
-    if (isIdentical(arr, fin)) {
-      playing = false;
-      wx.showToast({
-        title: "success!",
-      });
+function onSliderClick(i, j) {
+  let now = Date.now();
+  if (playing) {
+    if (!animOn || now - clickStamp > ANIM_DURATION || clickStamp === 0) {
+      console.log("clicked " + i + "," + j);
+      clickStamp = now;
+      clickPosition = [i, j];
+      // setTimeout(transformMatrix, animOn ? ANIM_DURATION : 0, matrix, i, j);
+      setTimeout(
+        () => {
+          transformMatrix(matrix, i, j);
+        },
+        animOn ? ANIM_DURATION : 0
+      );
+      // transformMatrix(matrix, i, j)
     }
   }
 }
 
-function shuffle(arr) {
-  const random = () => Math.ceil(Math.random() * arr.length) - 1;
-  for (let i = 0; i < 1000; i++) {
-    let res = getResult(arr, random(), random());
-    if (res) {
-      arr = res;
+function createMatrix(size) {
+  let matrix = [];
+  for (let i = 0; i < size; i++) {
+    matrix[i] = [];
+    for (let j = 0; j < size; j++) {
+      if (i === size - 1 && j === size - 1) {
+        matrix[i][j] = 0;
+      } else {
+        matrix[i][j] = i * size + j + 1;
+      }
     }
   }
-  return arr;
+  return matrix;
 }
 
-function getResult(arr, i, j) {
-  arr = clone(arr);
-  let num = arr[i][j];
-  if (num === 0) return false;
-  const [i0, j0] = getZeroPos(arr);
+function getZeroPostion(matrix) {
+  let position = [-1, -1];
+  iterateMatrix(matrix, (i, j) => {
+    if (matrix[i][j] === 0) {
+      position = [i, j];
+    }
+  });
+  return position;
+}
+
+function transformMatrix(matrix, i, j) {
+  let num = matrix[i][j];
+  const [i0, j0] = getZeroPostion(matrix);
   if (i === i0) {
     // 同行
     if (j < j0) {
       for (let k = j0 - 1; k >= j; k--) {
-        arr[i][k + 1] = arr[i][k];
+        matrix[i][k + 1] = matrix[i][k];
       }
     } else if (j > j0) {
       for (let k = j0 + 1; k <= j; k++) {
-        arr[i][k - 1] = arr[i][k];
+        matrix[i][k - 1] = matrix[i][k];
       }
     }
-    arr[i][j] = 0;
-    return arr;
+    matrix[i][j] = 0;
   } else if (j === j0) {
     if (i < i0) {
       for (let k = i0 - 1; k >= i; k--) {
-        arr[k + 1][j] = arr[k][j];
+        matrix[k + 1][j] = matrix[k][j];
       }
     } else if (i > i0) {
       for (let k = i0 + 1; k <= i; k++) {
-        arr[k - 1][j] = arr[k][j];
+        matrix[k - 1][j] = matrix[k][j];
       }
     }
-    arr[i][j] = 0;
-    return arr;
-  } else {
-    return false;
+    matrix[i][j] = 0;
   }
+  return matrix;
 }
 
-function getZeroPos(arr) {
-  let pos = [-1, -1];
-  iterate(arr, (i, j) => {
-    if (arr[i][j] === 0) {
-      pos = [i, j];
-    }
-  });
-  return pos;
+function drawBoard() {
+  ctx.fillStyle = "#b8aea5";
+  ctx.fillRect(BOARD_X, BOARD_Y, BOARD_W, BOARD_W);
 }
 
-function clone(obj) {
-  let res = [];
-  for (let i in obj) {
-    for (let j in obj[i]) {
-      if (!res[i]) {
-        res[i] = [];
-      }
-      res[i][j] = obj[i][j];
-    }
-  }
-  return res;
+function drawSlider(x, y, text) {
+  ctx.fillStyle = "#ece4cd";
+  roundedRect(ctx, x, y, sliderWidth, sliderWidth);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#e98f3f";
+  ctx.font = fontSize + "px serif";
+  ctx.fillText(text, x + sliderWidth / 2, y + sliderWidth / 2);
 }
 
-function isIdentical(arr1, arr2) {
-  let flag = true;
-  iterate(arr1, (i, j) => {
-    if (arr1[i][j] !== arr2[i][j]) {
-      flag = false;
-    }
-  });
-  return flag;
-}
-
-
-function iterate(arr, cb) {
-  for (let i = 0; i < arr.length; i++) {
-    for (let j = 0; j < arr[i].length; j++) {
-      cb(i, j);
-    }
-  }
-}
-
-function roundedRect(x, y, w, h, r = px(5)) {
+// ----------- utils
+function roundedRect(ctx, x, y, w, h, r = px(5)) {
   if (w < 2 * r) r = w / 2;
   if (h < 2 * r) r = h / 2;
   ctx.beginPath();
@@ -215,43 +206,12 @@ function roundedRect(x, y, w, h, r = px(5)) {
   ctx.fill();
 }
 
-function drawSlide(x, y, text) {
-  ctx.fillStyle = "#ece4cd";
-  roundedRect(x, y, SLIDE_W, SLIDE_W, px(5));
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = "#e98f3f";
-  ctx.font = "150px serif";
-  // let measure = ctx.measureText(text)
-  // const {actualBoundingBoxDescent, actualBoundingBoxAscent} = measure
-  // let offsetY = (actualBoundingBoxDescent - actualBoundingBoxAscent) / 2
-  // console.log(measure)
-  ctx.fillText(text, x + SLIDE_W / 2, y + SLIDE_W / 2);
-}
-
-function drawBoard() {
-  ctx.fillStyle = "#b8aea5";
-  ctx.fillRect(BOARD_X, BOARD_Y, BOARD_W, BOARD_W);
-}
-
-function drawStatusBar() {
-  ctx.fillStyle = "#b8aea5";
-  ctx.font = "75px serif";
-  ctx.textAlign = "left";
-  const text = "Time elapsed: " + (timeElapsed / 1000).toFixed(2) + "s";
-  ctx.fillText(text, BOARD_X, STATUS_Y);
-}
-
-function drawStartButton() {
-  ctx.fillStyle = "#b8aea5";
-  roundedRect(BUTTON_X, BUTTON_Y, BUTTON_W, BUTTON_H);
-  ctx.fillStyle = "#ece4cd";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = "75px serif";
-  // ctx.shadowOffsetX = px(2);
-  // ctx.shadowOffsetY = px(2);
-  // ctx.shadowBlur = px(2);
-  // ctx.shadowColor = "rgba(255, 255, 255, 0.5)";
-  ctx.fillText("Start", BUTTON_X + BUTTON_W / 2, BUTTON_Y + BUTTON_H / 2);
+function iterateMatrix(matrix, fn) {
+  let m = matrix.length;
+  let n = matrix[0].length;
+  for (let i = 0; i < m; i++) {
+    for (let j = 0; j < n; j++) {
+      fn(i, j);
+    }
+  }
 }
