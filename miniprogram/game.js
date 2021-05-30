@@ -1,217 +1,428 @@
-const isWx = typeof wx === "object";
-if (isWx) {
-  require("./weapp-adapter");
-}
+const {
+  px,
+  CANVAS_W,
+  CANVAS_H,
+  MENU_BOTTOM,
+  COLOR1,
+  COLOR2,
+  COLOR3,
+  COLOR4,
+} = require("./device");
+const {
+  inside,
+  createMatrix,
+  transformMatrix,
+  iterateMatrix,
+  isIdentical,
+  getZeroPostion,
+  format,
+} = require("./utils");
+const canvas = wx.createCanvas();
 const ctx = canvas.getContext("2d");
-const px = (x) => x * window.devicePixelRatio;
+const font1 = wx.loadFont("./static/SportypoReguler-OVGwe.ttf");
+console.log("font loaded:" + font1);
 
-const CANVAS_W = px(screen.availWidth);
-const CANVAS_H = px(screen.availHeight);
-const BOARD_X = px(20);
-const BOARD_Y = px(100);
-const BOARD_W = CANVAS_W - px(20) * 2;
-const ANIM_DURATION = 80;
+// game settings
+let animOn = true;
+class Home {
+  titleY = MENU_BOTTOM + px(80);
+  titleFontSize = CANVAS_W * 0.09;
+  menuW = CANVAS_W * 0.6;
+  menuH = px(65);
+  menuFontSize = this.menuH * 0.7;
+  menuX = (CANVAS_W - this.menuW) / 2;
+  menuY = px(300);
+  menuMargin = px(20);
+  menuTexts = ["3 × 3", "4 × 4", "5 × 5"];
+  constructor() {
+    this.menus = this.menuTexts.reduce((prev, text, i) => {
+      prev.push({
+        text: text,
+        y: this.menuY + i * (this.menuH + this.menuMargin),
+      });
+      return prev;
+    }, []);
+    this.touchListener = this.handleTouch.bind(this);
+    wx.onTouchStart(this.touchListener);
+  }
+  handleTouch(e) {
+    const { clientX, clientY } = e.touches[0];
+    const x = px(clientX);
+    const y = px(clientY);
+    this.menus.forEach((menu, i) => {
+      if (inside(x, y, this.menuX, menu.y, this.menuW, this.menuH)) {
+        scene.destory();
+        scene = new Play(parseInt(menu.text));
+      }
+    });
+  }
+  draw() {
+    ctx.fillStyle = COLOR1;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-let size = 4;
-let sliderMargin = px(5);
-let sliderWidth = (BOARD_W - sliderMargin * (size + 1)) / size;
-let fontSize = Math.floor(sliderWidth * 0.8);
+    ctx.fillStyle = "#fff";
+    ctx.font = `${this.titleFontSize}px ${font1}`;
+    ctx.textAlign = "center";
+    ctx.shadowColor = "#383573";
+    ctx.shadowBlur = px(10);
+    ctx.fillText("Digit Maze", CANVAS_W / 2, this.titleY);
 
-let matrix = createMatrix(size);
+    this.drawMenu();
+  }
+  drawMenu() {
+    ctx.font = `${this.menuFontSize}px fantasy`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    this.menus.forEach((menu, i) => {
+      const { text, y } = menu;
+      ctx.fillStyle = COLOR3;
+      ctx.fillRect(this.menuX, y, this.menuW, this.menuH);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(text, this.menuX + this.menuW / 2, y + this.menuH / 2);
+    });
+  }
+  destory() {
+    wx.offTouchStart(this.touchListener);
+  }
+}
 
-let clickStamp = 0;
-let clickPosition = [-1, -1];
-let animOn = false;
-let playing = true;
+class Play {
+  frameW = CANVAS_W * 0.8;
+  frameX = (CANVAS_W - this.frameW) / 2;
+  pauseX = this.frameX;
+  pauseY = MENU_BOTTOM + px(30);
+  pauseW = px(40);
+  pauseH = px(40);
+  frameY = this.pauseY + this.pauseH + px(50);
+  menuW = px(200);
+  menuH = px(65);
+  menuX = (CANVAS_W - this.menuW) / 2;
+  menuMargin = px(20);
+  menuFontSize = this.menuH * 0.7;
+  timeX = px(130);
+  timeY = this.pauseY + this.pauseH / 2;
+  timeFontsize = px(30);
+  tileMargin = px(10);
+  successTitleY = MENU_BOTTOM + px(80);
+  successTitleFontSize = CANVAS_W * 0.09;
+  successTimeFontSize = px(35);
+  successTimeY = this.successTitleY + px(100);
+  successMenuY = this.successTimeY + px(100);
 
-// ------ start script
+  clickPosition = [-1, -1];
+  clickStamp = 0;
+  animationDuration = 80;
+  timeElapsed = 0;
+  timeOffset = 0;
+  playing = false;
+  winning = false;
+
+  constructor(size) {
+    // data init
+    this.size = size;
+    this.init();
+  }
+  init() {
+    const { size } = this;
+    this.defaultMatrix = createMatrix(size);
+    this.matrix = createMatrix(size);
+
+    // ui init
+    this.tileW = (this.frameW - (size + 1) * this.tileMargin) / size;
+    this.fontSize = this.tileW * 0.8;
+
+    // resusable buttons
+    this.menuButtons = [
+      {
+        text: "RESUME",
+        handle: () => {
+          this.playing = true;
+          this.timeOffset += Date.now();
+        },
+      },
+      {
+        text: "RESTART",
+        handle: () => {
+          this.destory();
+          scene = new Play(this.size);
+        },
+      },
+      {
+        text: "HOME",
+        handle: () => {
+          this.destory();
+          scene = new Home();
+        },
+      },
+    ];
+
+    const pauseMenuLength = 3;
+    this.pauseMenuY =
+      (CANVAS_H -
+        (this.menuH * pauseMenuLength +
+          this.menuMargin * (pauseMenuLength - 1))) /
+      2;
+    this.pauseMenus = this.menuButtons.reduce((prev, cur, i) => {
+      prev.push(
+        Object.assign({}, cur, {
+          y: this.pauseMenuY + i * (this.menuH + this.menuMargin),
+        })
+      );
+      return prev;
+    }, []);
+
+    this.successMenus = this.menuButtons.slice(1).reduce((prev, cur, i) => {
+      prev.push(
+        Object.assign({}, cur, {
+          y: this.successMenuY + i * (this.menuH + this.menuMargin),
+        })
+      );
+      return prev;
+    }, []);
+
+    // bind click
+    this.touchListener = this.handleTouch.bind(this);
+    wx.onTouchStart(this.touchListener);
+
+    this.shuffle();
+    this.playing = true;
+    this.startTime = Date.now();
+  }
+  handleTouch(e) {
+    const { clientX, clientY } = e.touches[0];
+    const x = px(clientX);
+    const y = px(clientY);
+
+    if (this.playing) {
+      // handle tile click
+      iterateMatrix(this.matrix, (i, j) => {
+        let startX = this.frameX + this.tileMargin * (j + 1) + this.tileW * j;
+        let startY = this.frameY + this.tileMargin * (i + 1) + this.tileW * i;
+
+        if (inside(x, y, startX, startY, this.tileW, this.tileW)) {
+          let now = Date.now();
+          if (
+            !animOn ||
+            now - this.clickStamp > this.animationDuration ||
+            this.clickStamp === 0
+          ) {
+            console.log("clicked " + i + "," + j);
+            this.clickStamp = now;
+            this.clickPosition = [i, j];
+            // 小游戏真机不支持第三个参数
+            // setTimeout(transformMatrix, animOn ? ANIM_DURATION : 0, matrix, i, j);
+            setTimeout(
+              () => {
+                transformMatrix(this.matrix, i, j);
+                if (isIdentical(this.matrix, this.defaultMatrix)) {
+                  this.playing = false;
+                  this.winning = true;
+                  console.log("success");
+                }
+              },
+              animOn ? this.animationDuration : 0
+            );
+          }
+        }
+      });
+
+      // handle pause button
+      if (inside(x, y, this.pauseX, this.pauseY, this.pauseW, this.pauseH)) {
+        console.log("PAUSE");
+        this.playing = false;
+        this.timeOffset -= Date.now();
+      }
+    } else if (this.winning) {
+      // handle winning menu
+      this.successMenus.forEach((menu) => {
+        if (inside(x, y, this.menuX, menu.y, this.menuW, this.menuH)) {
+          console.log(menu.text);
+          menu.handle();
+        }
+      });
+    } else {
+      // handle pause menu
+      this.pauseMenus.forEach((menu) => {
+        if (inside(x, y, this.menuX, menu.y, this.menuW, this.menuH)) {
+          console.log(menu.text);
+          menu.handle();
+        }
+      });
+    }
+  }
+  getAnimationStep() {
+    let distance = this.tileW + this.tileMargin;
+    let step = 0;
+    if (this.clickStamp !== 0 && animOn) {
+      step = Math.min(
+        distance,
+        (distance / this.animationDuration) * (Date.now() - this.clickStamp)
+      );
+    }
+    return step;
+  }
+  draw() {
+    ctx.fillStyle = COLOR1;
+    ctx.shadowColor = "#383573";
+    ctx.shadowBlur = px(10);
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    if (this.playing) {
+      this.timeElapsed = Date.now() - this.startTime - this.timeOffset;
+    }
+
+    this.drawPauseButton();
+    this.drawFrame();
+    this.drawTime();
+
+    const [i0, j0] = getZeroPostion(this.matrix);
+    const [i1, j1] = this.clickPosition;
+    let step = this.getAnimationStep();
+
+    iterateMatrix(this.matrix, (i, j) => {
+      let x = this.frameX + this.tileMargin * (j + 1) + this.tileW * j;
+      let y = this.frameY + this.tileMargin * (i + 1) + this.tileW * i;
+      const num = this.matrix[i][j];
+
+      if (num) {
+        if (animOn) {
+          if (i1 === i0 && i === i0) {
+            if (j1 < j0 && j < j0 && j >= j1) {
+              x = x + step;
+            } else if (j1 > j0 && j > j0 && j <= j1) {
+              x = x - step;
+            }
+          } else if (j1 === j0 && j === j0) {
+            if (i1 < i0 && i < i0 && i >= i1) {
+              y = y + step;
+            } else if (i1 > i0 && i > i0 && i <= i1) {
+              y = y - step;
+            }
+          }
+        }
+        this.drawTile(x, y, num);
+      }
+    });
+
+    if (!this.playing) {
+      if (this.winning) {
+        this.drawWinningMenu();
+      } else {
+        this.drawPauseMenu();
+      }
+    }
+  }
+  drawFrame() {
+    ctx.fillStyle = COLOR4;
+    ctx.fillRect(this.frameX, this.frameY, this.frameW, this.frameW);
+  }
+  drawTile(x, y, text) {
+    ctx.fillStyle = COLOR3;
+    ctx.fillRect(x, y, this.tileW, this.tileW);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#fff";
+    ctx.font = this.fontSize + "px fantasy";
+    ctx.fillText(text, x + this.tileW / 2, y + this.tileW / 2);
+  }
+  drawPauseButton() {
+    ctx.fillStyle = COLOR3;
+    ctx.fillRect(this.pauseX, this.pauseY, this.pauseW, this.pauseH);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#fff";
+    ctx.font = `${px(30)}px fantasy`;
+    ctx.fillText(
+      "||",
+      this.pauseX + this.pauseW / 2,
+      this.pauseY + this.pauseH / 2
+    );
+  }
+  drawTime() {
+    const text = format(this.timeElapsed);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#fff";
+    ctx.font = `${this.timeFontsize}px fantasy`;
+    ctx.fillText(text, this.timeX, this.timeY);
+  }
+  drawPauseMenu() {
+    ctx.fillStyle = "rgba(0,0,0,0.75)";
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    ctx.font = `${this.menuFontSize}px fantasy`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    this.pauseMenus.forEach((menu, i) => {
+      const { text, y } = menu;
+      ctx.fillStyle = COLOR3;
+      ctx.fillRect(this.menuX, y, this.menuW, this.menuH);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(text, this.menuX + this.menuW / 2, y + this.menuH / 2);
+    });
+  }
+  drawWinningMenu() {
+    ctx.fillStyle = "rgba(0,0,0,0.75)";
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    ctx.fillStyle = "#fff";
+    ctx.font = `${this.successTitleFontSize}px ${font1}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("SUCCESS!", CANVAS_W / 2, this.successTitleY);
+
+    ctx.font = `${this.successTimeFontSize}px fantasy`;
+    ctx.fillText(format(this.timeElapsed), CANVAS_W / 2, this.successTimeY);
+
+    ctx.font = `${this.menuFontSize}px fantasy`;
+    this.successMenus.forEach((menu, i) => {
+      const { text, y } = menu;
+      ctx.fillStyle = COLOR3;
+      ctx.fillRect(this.menuX, y, this.menuW, this.menuH);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(text, this.menuX + this.menuW / 2, y + this.menuH / 2);
+    });
+  }
+  shuffle() {
+    for (let i = 0; i < 5; i++) {
+      this.randomMove();
+    }
+  }
+  randomMove() {
+    const [i0, j0] = getZeroPostion(this.matrix);
+    let possibleMoves = [];
+    for (let i = 0; i < this.size; i++) {
+      if (i !== i0) {
+        possibleMoves.push([i, j0]);
+      }
+    }
+    for (let j = 0; j < this.size; j++) {
+      if (j !== j0) {
+        possibleMoves.push([i0, j]);
+      }
+    }
+    let index = Math.ceil(Math.random() * possibleMoves.length) - 1;
+    let [i, j] = possibleMoves[index];
+    transformMatrix(this.matrix, i, j);
+  }
+  destory() {
+    wx.offTouchStart(this.touchListener);
+  }
+}
+
+function loop() {
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+  scene.draw();
+
+  requestAnimationFrame(loop);
+}
+
 // scale
 canvas.width = CANVAS_W;
 canvas.height = CANVAS_H;
 
-draw();
+let scene = new Home();
+// let scene = new Play(3);
 
-window.addEventListener("touchstart", (e) => {
-  const { clientX, clientY } = e.touches[0];
-  let x = clientX;
-  let y = clientY;
-  if (isWx) {
-    x = px(clientX);
-    y = px(clientY);
-  }
-  iterateMatrix(matrix, (i, j) => {
-    let startX = BOARD_X + sliderMargin * (j + 1) + sliderWidth * j;
-    let startY = BOARD_Y + sliderMargin * (i + 1) + sliderWidth * i;
-    if (
-      x > startX &&
-      x < startX + sliderWidth &&
-      y > startY &&
-      y < startY + sliderWidth
-    ) {
-      onSliderClick(i, j);
-    }
-  });
-});
-
-// ------- functions
-function draw() {
-  drawBoard();
-
-  const [i0, j0] = getZeroPostion(matrix);
-  const [i1, j1] = clickPosition;
-
-  let now = Date.now();
-  let distance = sliderWidth + sliderMargin;
-  let offset = 0;
-
-  if (clickStamp !== 0 && animOn) {
-    offset = Math.min(
-      distance,
-      (distance / ANIM_DURATION) * (now - clickStamp)
-    );
-  }
-
-  iterateMatrix(matrix, (i, j) => {
-    let x = BOARD_X + sliderMargin * (j + 1) + sliderWidth * j;
-    let y = BOARD_Y + sliderMargin * (i + 1) + sliderWidth * i;
-    const num = matrix[i][j];
-
-    if (num) {
-      // calculate transition
-      if (animOn) {
-        if (i1 === i0 && i === i0) {
-          if (j1 < j0 && j < j0 && j >= j1) {
-            x = x + offset;
-          } else if (j1 > j0 && j > j0 && j <= j1) {
-            x = x - offset;
-          }
-        } else if (j1 === j0 && j === j0) {
-          if (i1 < i0 && i < i0 && i >= i1) {
-            y = y + offset;
-          } else if (i1 > i0 && i > i0 && i <= i1) {
-            y = y - offset;
-          }
-        }
-      }
-      drawSlider(x, y, num);
-    }
-  });
-
-  // if (start !== 0 && now - start > ANIM_DURATION) {
-  //   transformMatrix(matrix, i1, j1)
-  // }
-
-  requestAnimationFrame(draw);
-}
-
-function onSliderClick(i, j) {
-  let now = Date.now();
-  if (playing) {
-    if (!animOn || now - clickStamp > ANIM_DURATION || clickStamp === 0) {
-      console.log("clicked " + i + "," + j);
-      clickStamp = now;
-      clickPosition = [i, j];
-      // setTimeout(transformMatrix, animOn ? ANIM_DURATION : 0, matrix, i, j);
-      setTimeout(
-        () => {
-          transformMatrix(matrix, i, j);
-        },
-        animOn ? ANIM_DURATION : 0
-      );
-      // transformMatrix(matrix, i, j)
-    }
-  }
-}
-
-function createMatrix(size) {
-  let matrix = [];
-  for (let i = 0; i < size; i++) {
-    matrix[i] = [];
-    for (let j = 0; j < size; j++) {
-      if (i === size - 1 && j === size - 1) {
-        matrix[i][j] = 0;
-      } else {
-        matrix[i][j] = i * size + j + 1;
-      }
-    }
-  }
-  return matrix;
-}
-
-function getZeroPostion(matrix) {
-  let position = [-1, -1];
-  iterateMatrix(matrix, (i, j) => {
-    if (matrix[i][j] === 0) {
-      position = [i, j];
-    }
-  });
-  return position;
-}
-
-function transformMatrix(matrix, i, j) {
-  let num = matrix[i][j];
-  const [i0, j0] = getZeroPostion(matrix);
-  if (i === i0) {
-    // 同行
-    if (j < j0) {
-      for (let k = j0 - 1; k >= j; k--) {
-        matrix[i][k + 1] = matrix[i][k];
-      }
-    } else if (j > j0) {
-      for (let k = j0 + 1; k <= j; k++) {
-        matrix[i][k - 1] = matrix[i][k];
-      }
-    }
-    matrix[i][j] = 0;
-  } else if (j === j0) {
-    if (i < i0) {
-      for (let k = i0 - 1; k >= i; k--) {
-        matrix[k + 1][j] = matrix[k][j];
-      }
-    } else if (i > i0) {
-      for (let k = i0 + 1; k <= i; k++) {
-        matrix[k - 1][j] = matrix[k][j];
-      }
-    }
-    matrix[i][j] = 0;
-  }
-  return matrix;
-}
-
-function drawBoard() {
-  ctx.fillStyle = "#b8aea5";
-  ctx.fillRect(BOARD_X, BOARD_Y, BOARD_W, BOARD_W);
-}
-
-function drawSlider(x, y, text) {
-  ctx.fillStyle = "#ece4cd";
-  roundedRect(ctx, x, y, sliderWidth, sliderWidth);
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = "#e98f3f";
-  ctx.font = fontSize + "px serif";
-  ctx.fillText(text, x + sliderWidth / 2, y + sliderWidth / 2);
-}
-
-// ----------- utils
-function roundedRect(ctx, x, y, w, h, r = px(5)) {
-  if (w < 2 * r) r = w / 2;
-  if (h < 2 * r) r = h / 2;
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.fill();
-}
-
-function iterateMatrix(matrix, fn) {
-  let m = matrix.length;
-  let n = matrix[0].length;
-  for (let i = 0; i < m; i++) {
-    for (let j = 0; j < n; j++) {
-      fn(i, j);
-    }
-  }
-}
+loop();

@@ -31,7 +31,7 @@
     "useApiHostProcess": true
   },
   "compileType": "game",
-  "libVersion": "2.10.4",
+  "libVersion": "2.17.0",
   "appid": "wx1f4cbc52c50455bf",
   "projectname": "digit-maze",
   "miniprogramRoot": "miniprogram/",
