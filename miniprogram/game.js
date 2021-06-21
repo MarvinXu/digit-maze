@@ -16,32 +16,50 @@ const {
   isIdentical,
   getZeroPostion,
   format,
+  SoundManager,
+  RecordManager
 } = require("./utils");
 const canvas = wx.createCanvas();
 const ctx = canvas.getContext("2d");
-const font1 = wx.loadFont("./static/SportypoReguler-OVGwe.ttf");
+
+// load resource
+const font1 = wx.loadFont("static/Excluded-z8XrX.ttf");
 console.log("font loaded:" + font1);
+const titleImg = wx.createImage()
+titleImg.src = 'static/title.png'
+
+// records
+let recordManager = new RecordManager()
 
 // game settings
 let animOn = true;
+let soundOn = true;
+
 class Home {
-  titleY = MENU_BOTTOM + px(80);
-  titleFontSize = CANVAS_W * 0.09;
-  menuW = CANVAS_W * 0.6;
-  menuH = px(65);
-  menuFontSize = this.menuH * 0.7;
+  titleY = MENU_BOTTOM + CANVAS_H * 0.1;
+  titleW = CANVAS_W * 0.8;
+  titleH = this.titleW / 924 * 125;
+  menuW = CANVAS_W * 0.7;
+  menuH = px(85);
+  menuFontSize = this.menuH * 0.5;
+  menuSubFontSize = this.menuFontSize * 0.6
   menuX = (CANVAS_W - this.menuW) / 2;
-  menuY = px(300);
+  menuY = this.titleY + px(100);
   menuMargin = px(20);
   menuTexts = ["3 × 3", "4 × 4", "5 × 5"];
   constructor() {
     this.menus = this.menuTexts.reduce((prev, text, i) => {
+      const record = recordManager.get(text[0])
       prev.push({
-        text: text,
+        text,
         y: this.menuY + i * (this.menuH + this.menuMargin),
+        record: record ? format(record) : 'PLAY Now!'
       });
       return prev;
     }, []);
+
+    // load records
+
     this.touchListener = this.handleTouch.bind(this);
     wx.onTouchStart(this.touchListener);
   }
@@ -60,25 +78,26 @@ class Home {
     ctx.fillStyle = COLOR1;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-    ctx.fillStyle = "#fff";
-    ctx.font = `${this.titleFontSize}px ${font1}`;
-    ctx.textAlign = "center";
     ctx.shadowColor = "#383573";
     ctx.shadowBlur = px(10);
-    ctx.fillText("Digit Maze", CANVAS_W / 2, this.titleY);
+    ctx.drawImage(titleImg, (CANVAS_W - this.titleW) / 2, this.titleY, this.titleW, this.titleH)
 
     this.drawMenu();
   }
   drawMenu() {
-    ctx.font = `${this.menuFontSize}px fantasy`;
     ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
+    ctx.textBaseline = "top";
     this.menus.forEach((menu, i) => {
-      const { text, y } = menu;
+      const { text, y, record } = menu;
       ctx.fillStyle = COLOR3;
       ctx.fillRect(this.menuX, y, this.menuW, this.menuH);
+      
       ctx.fillStyle = "#fff";
-      ctx.fillText(text, this.menuX + this.menuW / 2, y + this.menuH / 2);
+      ctx.font = `${this.menuFontSize}px ${font1}`;
+      ctx.fillText(text, this.menuX + this.menuW / 2, y + this.menuH * 0.1);
+      
+      ctx.font = `${this.menuSubFontSize}px ${font1}`;
+      ctx.fillText(record, this.menuX + this.menuW / 2, y + this.menuFontSize + this.menuH * 0.1);
     });
   }
   destory() {
@@ -94,18 +113,18 @@ class Play {
   pauseW = px(40);
   pauseH = px(40);
   frameY = this.pauseY + this.pauseH + px(50);
-  menuW = px(200);
+  menuW = CANVAS_W * 0.75;
   menuH = px(65);
   menuX = (CANVAS_W - this.menuW) / 2;
   menuMargin = px(20);
-  menuFontSize = this.menuH * 0.7;
+  menuFontSize = this.menuH * 0.55;
   timeX = px(130);
   timeY = this.pauseY + this.pauseH / 2;
   timeFontsize = px(30);
   tileMargin = px(10);
   successTitleY = MENU_BOTTOM + px(80);
-  successTitleFontSize = CANVAS_W * 0.09;
-  successTimeFontSize = px(35);
+  successTitleFontSize = CANVAS_W * 0.12;
+  successTimeFontSize = CANVAS_W * 0.1;
   successTimeY = this.successTitleY + px(100);
   successMenuY = this.successTimeY + px(100);
 
@@ -116,6 +135,10 @@ class Play {
   timeOffset = 0;
   playing = false;
   winning = false;
+  newRecord = false;
+
+  clickSound = null
+  beepSound = null
 
   constructor(size) {
     // data init
@@ -152,11 +175,17 @@ class Play {
         handle: () => {
           this.destory();
           scene = new Home();
-        },
+        }
       },
+      {
+        text: "SOUND: ${x}",
+        handle: () => {
+          soundOn = !soundOn
+        }
+      }
     ];
 
-    const pauseMenuLength = 3;
+    const pauseMenuLength = 4;
     this.pauseMenuY =
       (CANVAS_H -
         (this.menuH * pauseMenuLength +
@@ -171,7 +200,7 @@ class Play {
       return prev;
     }, []);
 
-    this.successMenus = this.menuButtons.slice(1).reduce((prev, cur, i) => {
+    this.successMenus = this.menuButtons.slice(1, 3).reduce((prev, cur, i) => {
       prev.push(
         Object.assign({}, cur, {
           y: this.successMenuY + i * (this.menuH + this.menuMargin),
@@ -183,6 +212,10 @@ class Play {
     // bind click
     this.touchListener = this.handleTouch.bind(this);
     wx.onTouchStart(this.touchListener);
+
+    // sound
+    this.clickSound = new SoundManager('static/click.m4a')
+    this.beepSound = new SoundManager('static/beep.m4a')
 
     this.shuffle();
     this.playing = true;
@@ -206,7 +239,14 @@ class Play {
             now - this.clickStamp > this.animationDuration ||
             this.clickStamp === 0
           ) {
-            console.log("clicked " + i + "," + j);
+            // console.log("clicked " + i + "," + j);
+            if (soundOn) {
+              if (this.isMovable(i, j)) {
+                this.clickSound.play();
+              } else {
+                this.beepSound.play();
+              }
+            }
             this.clickStamp = now;
             this.clickPosition = [i, j];
             // 小游戏真机不支持第三个参数
@@ -215,9 +255,18 @@ class Play {
               () => {
                 transformMatrix(this.matrix, i, j);
                 if (isIdentical(this.matrix, this.defaultMatrix)) {
+                  // success
                   this.playing = false;
                   this.winning = true;
                   console.log("success");
+
+                  // set new record
+                  const currentRecord = recordManager.get(this.size)
+                  if (!currentRecord || this.timeElapsed < currentRecord) {
+                    this.newRecord = true
+                    recordManager.set(this.size, this.timeElapsed)
+                  }
+                  
                 }
               },
               animOn ? this.animationDuration : 0
@@ -322,7 +371,7 @@ class Play {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle = "#fff";
-    ctx.font = this.fontSize + "px fantasy";
+    ctx.font = `${this.fontSize}px ${font1}`;
     ctx.fillText(text, x + this.tileW / 2, y + this.tileW / 2);
   }
   drawPauseButton() {
@@ -331,7 +380,7 @@ class Play {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle = "#fff";
-    ctx.font = `${px(30)}px fantasy`;
+    ctx.font = `${px(30)}px ${font1}`;
     ctx.fillText(
       "||",
       this.pauseX + this.pauseW / 2,
@@ -343,21 +392,24 @@ class Play {
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     ctx.fillStyle = "#fff";
-    ctx.font = `${this.timeFontsize}px fantasy`;
+    ctx.font = `${this.timeFontsize}px ${font1}`;
     ctx.fillText(text, this.timeX, this.timeY);
   }
   drawPauseMenu() {
     ctx.fillStyle = "rgba(0,0,0,0.75)";
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-    ctx.font = `${this.menuFontSize}px fantasy`;
+    ctx.font = `${this.menuFontSize}px ${font1}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     this.pauseMenus.forEach((menu, i) => {
-      const { text, y } = menu;
+      let { text, y } = menu;
       ctx.fillStyle = COLOR3;
       ctx.fillRect(this.menuX, y, this.menuW, this.menuH);
       ctx.fillStyle = "#fff";
+      if (i === 3) {
+        text = text.replace('${x}', soundOn ? 'ON' : 'OFF')
+      }
       ctx.fillText(text, this.menuX + this.menuW / 2, y + this.menuH / 2);
     });
   }
@@ -369,12 +421,16 @@ class Play {
     ctx.font = `${this.successTitleFontSize}px ${font1}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText("SUCCESS!", CANVAS_W / 2, this.successTitleY);
+    let text = "SUCCESS!"
+    if (this.newRecord) {
+      text = "NEW RECORD!"
+    }
+    ctx.fillText(text, CANVAS_W / 2, this.successTitleY);
 
-    ctx.font = `${this.successTimeFontSize}px fantasy`;
+    ctx.font = `${this.successTimeFontSize}px ${font1}`;
     ctx.fillText(format(this.timeElapsed), CANVAS_W / 2, this.successTimeY);
 
-    ctx.font = `${this.menuFontSize}px fantasy`;
+    ctx.font = `${this.menuFontSize}px ${font1}`;
     this.successMenus.forEach((menu, i) => {
       const { text, y } = menu;
       ctx.fillStyle = COLOR3;
@@ -384,7 +440,7 @@ class Play {
     });
   }
   shuffle() {
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 100; i++) {
       this.randomMove();
     }
   }
@@ -404,6 +460,10 @@ class Play {
     let index = Math.ceil(Math.random() * possibleMoves.length) - 1;
     let [i, j] = possibleMoves[index];
     transformMatrix(this.matrix, i, j);
+  }
+  isMovable(i, j) {
+    const [i0, j0] = getZeroPostion(this.matrix);
+    return (i === i0 || j === j0) && !(i === i0 && j === j0)
   }
   destory() {
     wx.offTouchStart(this.touchListener);

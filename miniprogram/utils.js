@@ -106,6 +106,48 @@ function pad(num) {
   return num < 10 ? '0' + num : num + ''
 }
 
+// wx utility
+class SoundManager {
+  constructor(src) {
+    this.src = src
+  }
+  play() {
+    const ctx = wx.createInnerAudioContext()
+    ctx.src = this.src
+    ctx.onEnded(() => {
+      ctx.destroy()
+    })
+    ctx.play()
+  }
+}
+
+class RecordManager {
+  key = 'record'
+  records = {}
+  constructor() {
+    try {
+      const res = wx.getStorageSync(this.key)
+      Object.assign(this.records, res)
+    } catch (error) {
+      console.log('load record failed!')
+    }
+  }
+  set(type, value) {
+    this.records[type] = value
+    this.save()
+  }
+  get(type) {
+    return this.records[type]
+  }
+  save() {
+    try {
+      wx.setStorageSync(this.key, this.records)
+    } catch (error) {
+      console.log('save record failed!')
+    }
+  }
+}
+
 exports.roundedRect = roundedRect
 exports.inside = inside
 exports.createMatrix = createMatrix
@@ -114,3 +156,5 @@ exports.iterateMatrix = iterateMatrix
 exports.isIdentical = isIdentical
 exports.getZeroPostion = getZeroPostion
 exports.format = format
+exports.SoundManager = SoundManager
+exports.RecordManager = RecordManager
